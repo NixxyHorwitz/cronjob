@@ -1,14 +1,8 @@
 const express = require('express');
-const axios = require('axios');
 const app = express();
 
 app.use(express.json());
 app.use(express.urlencoded({extended: true}));
-
-// Storage untuk cronjob (dalam memory)
-let cronJobs = {};
-let cronLogs = [];
-const MAX_LOGS = 50;
 
 // HTML Template
 const htmlTemplate = `
@@ -87,6 +81,11 @@ const htmlTemplate = `
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
         .btn-stop {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             margin-left: 10px;
@@ -139,15 +138,32 @@ const htmlTemplate = `
         .log-info {
             color: #44aaff;
         }
+        .alert {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            color: #856404;
+        }
+        .alert strong {
+            display: block;
+            margin-bottom: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>⏰ Cronjob Manager</h1>
-            <p>Kelola cronjob Anda dengan mudah</p>
+            <p>Client-side Cronjob Runner</p>
         </div>
         <div class="content">
+            <div class="alert">
+                <strong>ℹ️ Info:</strong>
+                Cronjob ini berjalan di browser Anda (client-side). Tab browser harus tetap terbuka agar cronjob berjalan.
+            </div>
+
             <form id="cronForm">
                 <div class="form-group">
                     <label for="url">Target URL:</label>
@@ -155,14 +171,14 @@ const htmlTemplate = `
                 </div>
                 <div class="form-group">
                     <label for="interval">Interval (detik):</label>
-                    <input type="number" id="interval" name="interval" min="1" placeholder="60" required>
+                    <input type="number" id="interval" name="interval" min="1" placeholder="60" value="60" required>
                 </div>
                 <div class="form-group">
-                    <label for="jobName">Nama Job (opsional):</label>
-                    <input type="text" id="jobName" name="jobName" placeholder="My Cronjob">
+                    <label for="jobName">Nama Job:</label>
+                    <input type="text" id="jobName" name="jobName" placeholder="My Cronjob" required>
                 </div>
-                <button type="submit" class="btn">🚀 Mulai Cronjob</button>
-                <button type="button" class="btn btn-stop" onclick="stopAllJobs()">⏹️ Stop Semua</button>
+                <button type="submit" class="btn" id="startBtn">🚀 Mulai Cronjob</button>
+                <button type="button" class="btn btn-stop" onclick="stopAllJobs()" id="stopBtn">⏹️ Stop Semua</button>
             </form>
 
             <div class="status">
@@ -180,6 +196,9 @@ const htmlTemplate = `
     </div>
 
     <script>
+        let cronJobs = {};
+        let logs = [];
+
         function addLog(message, type = 'info') {
             const logsDiv = document.getElementById('logs');
             const time = new Date().toLocaleTimeString('id-ID');
@@ -188,191 +207,155 @@ const htmlTemplate = `
             logEntry.className = 'log-entry ' + logClass;
             logEntry.innerHTML = '<span class="log-time">[' + time + ']</span> ' + message;
             logsDiv.insertBefore(logEntry, logsDiv.firstChild);
+            
+            logs.unshift({ time, message, type });
+            if (logs.length > 50) logs.pop();
+            
+            console.log('[' + time + '] ' + message);
         }
 
-        document.getElementById('cronForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = {
-                url: document.getElementById('url').value,
-                interval: parseInt(document.getElementById('interval').value),
-                jobName: document.getElementById('jobName').value || 'Job-' + Date.now()
-            };
-
+        async function executeCron(jobId, url) {
             try {
-                const response = await fetch('/api/start-cron', {
+                addLog('🔄 Menjalankan cronjob: ' + jobId + ' ke ' + url, 'info');
+                const startTime = Date.now();
+                
+                const response = await fetch('/api/proxy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(formData)
+                    body: JSON.stringify({ url })
                 });
+                
                 const data = await response.json();
-                addLog('✅ ' + data.message, 'success');
+                const duration = Date.now() - startTime;
+                
+                if (data.success) {
+                    cronJobs[jobId].executions++;
+                    addLog('✅ Cronjob ' + jobId + ' berhasil (' + duration + 'ms) - Status: ' + data.status, 'success');
+                } else {
+                    addLog('❌ Cronjob ' + jobId + ' gagal: ' + data.error, 'error');
+                }
+                
                 updateStatus();
             } catch (error) {
-                addLog('❌ Error: ' + error.message, 'error');
+                addLog('❌ Cronjob ' + jobId + ' gagal: ' + error.message, 'error');
+            }
+        }
+
+        document.getElementById('cronForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const url = document.getElementById('url').value;
+            const interval = parseInt(document.getElementById('interval').value);
+            const jobName = document.getElementById('jobName').value || 'Job-' + Date.now();
+
+            if (cronJobs[jobName]) {
+                clearInterval(cronJobs[jobName].timer);
+                addLog('⚠️ Cronjob ' + jobName + ' sudah ada, akan direstart', 'info');
+            }
+
+            const timer = setInterval(() => executeCron(jobName, url), interval * 1000);
+            
+            cronJobs[jobName] = {
+                timer,
+                url,
+                interval,
+                executions: 0,
+                startedAt: new Date().toLocaleTimeString('id-ID')
+            };
+
+            addLog('🚀 Cronjob ' + jobName + ' dimulai dengan interval ' + interval + ' detik', 'success');
+            executeCron(jobName, url);
+            updateStatus();
+        });
+
+        function stopAllJobs() {
+            let count = 0;
+            Object.keys(cronJobs).forEach(jobId => {
+                clearInterval(cronJobs[jobId].timer);
+                count++;
+            });
+            cronJobs = {};
+            addLog('🛑 Semua cronjob dihentikan (' + count + ' job)', 'info');
+            updateStatus();
+        }
+
+        function updateStatus() {
+            const statusDiv = document.getElementById('jobStatus');
+            const jobKeys = Object.keys(cronJobs);
+            
+            if (jobKeys.length === 0) {
+                statusDiv.innerHTML = 'Tidak ada cronjob yang berjalan';
+            } else {
+                statusDiv.innerHTML = jobKeys.map(jobId => {
+                    const job = cronJobs[jobId];
+                    return '<div class="job-item">' +
+                        '<strong>' + jobId + '</strong><br>' +
+                        'URL: ' + job.url + '<br>' +
+                        'Interval: ' + job.interval + ' detik<br>' +
+                        'Eksekusi: ' + job.executions + ' kali<br>' +
+                        'Dimulai: ' + job.startedAt +
+                        '</div>';
+                }).join('');
+            }
+        }
+
+        // Peringatan sebelum menutup tab
+        window.addEventListener('beforeunload', (e) => {
+            if (Object.keys(cronJobs).length > 0) {
+                e.preventDefault();
+                e.returnValue = '';
+                return 'Cronjob masih berjalan. Yakin ingin menutup?';
             }
         });
 
-        async function stopAllJobs() {
-            try {
-                const response = await fetch('/api/stop-all', { method: 'POST' });
-                const data = await response.json();
-                addLog('🛑 ' + data.message, 'info');
-                updateStatus();
-            } catch (error) {
-                addLog('❌ Error: ' + error.message, 'error');
-            }
-        }
-
-        async function updateStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-                const statusDiv = document.getElementById('jobStatus');
-                
-                if (data.jobs.length === 0) {
-                    statusDiv.innerHTML = 'Tidak ada cronjob yang berjalan';
-                } else {
-                    statusDiv.innerHTML = data.jobs.map(job => 
-                        '<div class="job-item">' +
-                        '<strong>' + job.name + '</strong><br>' +
-                        'URL: ' + job.url + '<br>' +
-                        'Interval: ' + job.interval + ' detik<br>' +
-                        'Eksekusi: ' + job.executions + ' kali' +
-                        '</div>'
-                    ).join('');
-                }
-            } catch (error) {
-                addLog('❌ Error updating status: ' + error.message, 'error');
-            }
-        }
-
-        async function fetchLogs() {
-            try {
-                const response = await fetch('/api/logs');
-                const data = await response.json();
-                const logsDiv = document.getElementById('logs');
-                logsDiv.innerHTML = data.logs.map(log => 
-                    '<div class="log-entry log-' + log.type + '">' +
-                    '<span class="log-time">[' + log.time + ']</span> ' + log.message +
-                    '</div>'
-                ).join('');
-            } catch (error) {
-                console.error('Error fetching logs:', error);
-            }
-        }
-
-        // Update status setiap 3 detik
-        setInterval(updateStatus, 3000);
-        setInterval(fetchLogs, 2000);
-        
-        // Initial load
-        updateStatus();
+        addLog('✅ System ready', 'success');
     </script>
 </body>
 </html>
 `;
-
-// Fungsi untuk menambahkan log
-function addLog(message, type = 'info') {
-  const time = new Date().toLocaleTimeString('id-ID');
-  const log = {time, message, type};
-  cronLogs.unshift(log);
-  if (cronLogs.length > MAX_LOGS) cronLogs.pop();
-  console.log(`[${time}] ${message}`);
-}
 
 // Route utama
 app.get('/', (req, res) => {
   res.send(htmlTemplate);
 });
 
-// API untuk memulai cronjob
-app.post('/api/start-cron', async (req, res) => {
-  const {url, interval, jobName} = req.body;
+// API Proxy untuk bypass CORS
+app.post('/api/proxy', async (req, res) => {
+  const {url} = req.body;
 
-  if (!url || !interval) {
-    return res.status(400).json({error: 'URL dan interval harus diisi'});
+  if (!url) {
+    return res.status(400).json({success: false, error: 'URL harus diisi'});
   }
 
-  const jobId = jobName || `job-${Date.now()}`;
+  try {
+    console.log(`[${new Date().toISOString()}] Proxy request to: ${url}`);
 
-  // Hentikan job lama jika ada
-  if (cronJobs[jobId]) {
-    clearInterval(cronJobs[jobId].timer);
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(url, {
+      method: 'GET',
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Cronjob-Manager/1.0',
+      },
+    });
+
+    const text = await response.text();
+    console.log(`[${new Date().toISOString()}] Response status: ${response.status}`);
+
+    res.json({
+      success: true,
+      status: response.status,
+      statusText: response.statusText,
+      data: text.substring(0, 500),
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error:`, error.message);
+    res.json({
+      success: false,
+      error: error.message,
+    });
   }
-
-  // Fungsi untuk eksekusi cronjob
-  const executeCron = async () => {
-    try {
-      addLog(`🔄 Menjalankan cronjob: ${jobId} ke ${url}`, 'info');
-      const startTime = Date.now();
-
-      const response = await axios.get(url, {timeout: 30000});
-      const duration = Date.now() - startTime;
-
-      cronJobs[jobId].executions++;
-      addLog(`✅ Cronjob ${jobId} berhasil (${duration}ms) - Status: ${response.status}`, 'success');
-    } catch (error) {
-      addLog(`❌ Cronjob ${jobId} gagal: ${error.message}`, 'error');
-    }
-  };
-
-  // Buat timer untuk cronjob
-  const timer = setInterval(executeCron, interval * 1000);
-
-  cronJobs[jobId] = {
-    timer,
-    url,
-    interval,
-    name: jobId,
-    executions: 0,
-    startedAt: new Date().toISOString(),
-  };
-
-  addLog(`🚀 Cronjob ${jobId} dimulai dengan interval ${interval} detik`, 'success');
-
-  // Eksekusi pertama kali
-  executeCron();
-
-  res.json({
-    message: `Cronjob ${jobId} berhasil dimulai`,
-    jobId,
-  });
 });
 
-// API untuk stop semua cronjob
-app.post('/api/stop-all', (req, res) => {
-  let count = 0;
-  Object.keys(cronJobs).forEach(jobId => {
-    clearInterval(cronJobs[jobId].timer);
-    count++;
-  });
-  cronJobs = {};
-  addLog(`🛑 Semua cronjob dihentikan (${count} job)`, 'info');
-  res.json({message: `${count} cronjob berhasil dihentikan`});
-});
-
-// API untuk status cronjob
-app.get('/api/status', (req, res) => {
-  const jobs = Object.keys(cronJobs).map(jobId => ({
-    name: cronJobs[jobId].name,
-    url: cronJobs[jobId].url,
-    interval: cronJobs[jobId].interval,
-    executions: cronJobs[jobId].executions,
-    startedAt: cronJobs[jobId].startedAt,
-  }));
-  res.json({jobs, total: jobs.length});
-});
-
-// API untuk logs
-app.get('/api/logs', (req, res) => {
-  res.json({logs: cronLogs});
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server berjalan di port ${PORT}`);
-  addLog(`🚀 Server dimulai di port ${PORT}`, 'success');
-});
-
+// Export untuk Vercel
 module.exports = app;
