@@ -43,7 +43,7 @@ async function checkBotStatus(token, data) {
 
   const timeSinceLastBeat = now - lastCheck.timestamp;
 
-  // Bot dianggap down jika tidak ada heartbeat > 1 menit
+  // Bot dian eeggap down jika tidak ada heartbeat > 1 menit
   if (timeSinceLastBeat > CHECK_INTERVAL && lastCheck.status !== 'down') {
     // Cek apakah sudah pernah kirim alert dalam 10 menit terakhir
     if (lastCheck.lastAlert && now - lastCheck.lastAlert < ALERT_COOLDOWN) {
