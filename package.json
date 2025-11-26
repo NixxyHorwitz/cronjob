@@ -1,8 +1,12 @@
 {
-  "name": "cronjob-manager",
+  "name": "telegram-bot-monitor",
   "version": "1.0.0",
-  "dependencies": {
-    "express": "^4.18.2",
-    "node-fetch": "^2.6.7"
-  }
+  "description": "Vercel-based monitor untuk Telegram Bot",
+  "main": "api/heartbeat.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {},
+  "devDependencies": {}
 }

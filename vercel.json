@@ -1,15 +1,31 @@
 {
   "version": 2,
+  "name": "telegram-bot-monitor",
   "builds": [
     {
-      "src": "index.js",
+      "src": "api/**/*.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "index.js"
+      "src": "/api/heartbeat",
+      "dest": "/api/heartbeat.js",
+      "methods": ["POST", "OPTIONS"]
+    },
+    {
+      "src": "/api/cron-check",
+      "dest": "/api/cron-check.js",
+      "methods": ["GET", "POST"]
     }
-  ]
+  ],
+  "crons": [
+    {
+      "path": "/api/cron-check",
+      "schedule": "* * * * *"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
 }
